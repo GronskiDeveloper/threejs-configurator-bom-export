@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cabinet configurator with BOM export - Three.js starter</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#070809; --panel:#111419; --fg:#f1f0ec; --muted:#8b9099;
+    --line:#232833; --field:#191d24; --go:#2fb866;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
+    font-family:"IBM Plex Sans",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  #app{display:grid;grid-template-columns:1fr 360px;height:100%}
+  #view{position:relative;min-width:0}
+  canvas{display:block}
+  #panel{background:var(--panel);border-left:1px solid var(--line);padding:24px 22px;overflow:auto}
+  h1{font-size:16px;font-weight:600;margin:0 0 3px}
+  .lead{font-size:12.5px;color:var(--muted);line-height:1.5;margin:0 0 22px}
+  .row{margin:16px 0}
+  .row label{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:8px}
+  .row label b{font-family:"JetBrains Mono",monospace;color:var(--fg);font-weight:500}
+  input[type=range]{width:100%;accent-color:var(--fg);cursor:pointer}
+  .bom{margin-top:22px;padding-top:18px;border-top:1px solid var(--line)}
+  .bom h2{font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:0 0 10px}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th,td{text-align:left;padding:6px 4px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:500}
+  td.n,th.n{text-align:right;font-family:"JetBrains Mono",monospace}
+  tfoot td{color:var(--muted);border:0;padding-top:8px}
+  .export{margin-top:16px;width:100%;cursor:pointer;border:0;background:var(--go);color:#04240f;
+    padding:12px;font:inherit;font-size:13px;font-weight:600;border-radius:7px}
+  .export:focus-visible{outline:2px solid var(--fg);outline-offset:2px}
+  .foot{margin-top:22px;font-size:12px;color:var(--muted);line-height:1.6}
+  .foot a{color:var(--fg);text-decoration:none;border-bottom:1px solid var(--line)}
+  .foot a:hover{border-color:var(--fg)}
+  @media (max-width:800px){
+    #app{grid-template-columns:1fr;grid-template-rows:54vh auto}
+    #panel{border-left:0;border-top:1px solid var(--line)}
+  }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+  "gsap": "https://cdn.jsdelivr.net/npm/gsap@3.12.5/index.js"
+} }
+</script>
+</head>
+<body>
+<div id="app">
+  <div id="view"></div>
+  <aside id="panel">
+    <h1>Cabinet configurator with BOM</h1>
+    <p class="lead">A configurator is not done at the 3D view. The factory needs the parts list. Here the bill of materials falls out of the same numbers, live, and exports to CSV.</p>
+
+    <div class="row">
+      <label>Width <b id="wOut">80 cm</b></label>
+      <input id="w" type="range" min="40" max="120" step="5" value="80">
+    </div>
+    <div class="row">
+      <label>Height <b id="hOut">180 cm</b></label>
+      <input id="h" type="range" min="80" max="240" step="10" value="180">
+    </div>
+    <div class="row">
+      <label>Depth <b id="dOut">35 cm</b></label>
+      <input id="d" type="range" min="25" max="60" step="5" value="35">
+    </div>
+    <div class="row">
+      <label>Shelves <b id="sOut">4</b></label>
+      <input id="s" type="range" min="1" max="8" step="1" value="4">
+    </div>
+
+    <div class="bom">
+      <h2>Bill of materials</h2>
+      <table>
+        <thead><tr><th>Part</th><th class="n">Size (mm)</th><th class="n">Qty</th></tr></thead>
+        <tbody id="bomRows"></tbody>
+        <tfoot><tr><td colspan="3" id="bomSum"></td></tr></tfoot>
+      </table>
+      <button class="export" id="export">Export BOM (CSV)</button>
+    </div>
+
+    <p class="foot">
+      Built by <a href="https://grodev.pl/en/custom-3d-configurator" target="_blank" rel="noopener">GroDev</a>.
+      The BOM and factory handoff is where most configurators stop short.
+      <a href="https://grodev.pl/konfigurator-produktowy-3d" target="_blank" rel="noopener">grodev.pl</a>.
+    </p>
+  </aside>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import gsap from 'gsap';
+
+let cfg = { w: 80, h: 180, d: 35, shelves: 4 };
+const T = 18; // panel thickness in mm, a real chipboard board
+
+const view = document.getElementById('view');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+view.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x070809);
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+
+const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
+camera.position.set(2.4, 1.6, 3.0);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.target.set(0, 0.9, 0);
+controls.minDistance = 2;
+controls.maxDistance = 7;
+controls.maxPolarAngle = Math.PI / 1.9;
+
+const sun = new THREE.DirectionalLight(0xffffff, 1.1);
+sun.position.set(3, 6, 4);
+sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
+sun.shadow.camera.top = sun.shadow.camera.right = 3;
+sun.shadow.camera.bottom = sun.shadow.camera.left = -3;
+scene.add(sun);
+
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(14, 14), new THREE.ShadowMaterial({ opacity: 0.3 }));
+floor.rotation.x = -Math.PI / 2;
+floor.receiveShadow = true;
+scene.add(floor);
+
+const body = new THREE.MeshStandardMaterial({ color: 0xbf9358, roughness: 0.62, metalness: 0 });
+const back = new THREE.MeshStandardMaterial({ color: 0x8f6c42, roughness: 0.8 });
+const cabinet = new THREE.Group();
+scene.add(cabinet);
+
+function build(animate) {
+  cabinet.clear();
+  const w = cfg.w / 100, h = cfg.h / 100, d = cfg.d / 100, t = T / 1000;
+  const parts = [];
+  const box = (sx, sy, sz, x, y, z, m) => {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), m || body);
+    mesh.position.set(x, y, z);
+    mesh.castShadow = true;
+    cabinet.add(mesh);
+    parts.push(mesh);
+  };
+  box(t, h, d, -w/2 + t/2, h/2, 0);          // left side
+  box(t, h, d,  w/2 - t/2, h/2, 0);          // right side
+  box(w - 2*t, t, d, 0, h - t/2, 0);         // top
+  box(w - 2*t, t, d, 0, t/2, 0);             // bottom
+  box(w - 2*t, h - 2*t, t/3, 0, h/2, -d/2 + t/6, back); // back panel
+  const gap = h / (cfg.shelves + 1);
+  for (let i = 1; i <= cfg.shelves; i++) box(w - 2*t, t, d - t, 0, gap * i, t/2);
+
+  if (animate && !reduced) gsap.from(parts.map(p => p.scale), { y: 0.9, duration: 0.5, ease: 'power3.out', stagger: 0.03 });
+}
+
+// the bill of materials is derived from the same numbers, in millimetres, the way a cutlist is read.
+function bom() {
+  const W = cfg.w * 10, H = cfg.h * 10, D = cfg.d * 10; // cm to mm
+  const rows = [
+    { part: 'Side panel', size: `${H} x ${D}`, qty: 2 },
+    { part: 'Top / bottom', size: `${W - 2*T} x ${D}`, qty: 2 },
+    { part: 'Shelf', size: `${W - 2*T} x ${D - T}`, qty: cfg.shelves },
+    { part: 'Back panel (HDF)', size: `${W - 2*T} x ${H - 2*T}`, qty: 1 },
+  ];
+  // hardware falls out of the structure, not typed in by hand
+  const shelfPins = cfg.shelves * 4;
+  const caseScrews = 8;
+  rows.push({ part: 'Shelf support pin', size: '5 mm', qty: shelfPins });
+  rows.push({ part: 'Case screw', size: '4 x 50', qty: caseScrews });
+  // edge banding: visible front edges of every board, in running metres
+  const edgeM = ((H * 2) + (W * 2) + (cfg.shelves * W)) / 1000;
+  rows.push({ part: 'Edge banding', size: `${edgeM.toFixed(1)} m`, qty: 1 });
+  return rows;
+}
+
+const wOut = document.getElementById('wOut'), hOut = document.getElementById('hOut'),
+      dOut = document.getElementById('dOut'), sOut = document.getElementById('sOut');
+const bomRows = document.getElementById('bomRows'), bomSum = document.getElementById('bomSum');
+
+function paintBom() {
+  const rows = bom();
+  bomRows.innerHTML = rows.map(r => `<tr><td>${r.part}</td><td class="n">${r.size}</td><td class="n">${r.qty}</td></tr>`).join('');
+  const boards = rows.slice(0, 4).reduce((a, r) => a + r.qty, 0);
+  bomSum.textContent = `${boards} boards, ${rows.length} line items`;
+}
+
+function exportCsv() {
+  const rows = bom();
+  const lines = ['part,size_mm,qty', ...rows.map(r => `"${r.part}","${r.size}",${r.qty}`)];
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `cabinet-${cfg.w}x${cfg.h}x${cfg.d}-bom.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function onChange() { build(false); paintBom(); }
+document.getElementById('w').addEventListener('input', e => { cfg.w = +e.target.value; wOut.textContent = cfg.w + ' cm'; onChange(); });
+document.getElementById('h').addEventListener('input', e => { cfg.h = +e.target.value; hOut.textContent = cfg.h + ' cm'; onChange(); });
+document.getElementById('d').addEventListener('input', e => { cfg.d = +e.target.value; dOut.textContent = cfg.d + ' cm'; onChange(); });
+document.getElementById('s').addEventListener('input', e => { cfg.shelves = +e.target.value; sOut.textContent = cfg.shelves; onChange(); });
+document.getElementById('export').addEventListener('click', exportCsv);
+
+function resize() {
+  const w = view.clientWidth, h = view.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize);
+
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+build(true);
+paintBom();
+resize();
+controls.autoRotate = !reduced;
+controls.autoRotateSpeed = 0.5;
+renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+</script>
+</body>
+</html>
